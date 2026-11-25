@@ -134,6 +134,11 @@ body.route-home main{padding-top:0}
 .hero-progress i{display:block;height:100%;background:var(--blanc);transform-origin:0 50%;transform:scaleX(0)}
 .hero-progress i.run{animation:prog var(--dur,6500ms) linear forwards}
 .hero.is-paused .hero-progress i{animation-play-state:paused}
+.hero.show{height:clamp(440px,78svh,960px);min-height:0}
+.hero.show::before{display:none}
+.show .hero-title{font-size:clamp(2rem,1rem + 3.6vw,5rem)}
+.show .hero-progress{display:none}
+.hero-kicker{font-size:var(--t-s);color:rgba(255,255,255,.8);margin-bottom:14px}
 @keyframes prog{to{transform:scaleX(1)}}
 @media (max-width:700px){
   .hero-cap{flex-direction:column;align-items:flex-start;gap:14px}
@@ -690,12 +695,15 @@ function zoomable(stage, keyOf) {
 }
 
 /* Accueil -------------------------------------------------------- */
-function renderHome() {
-  document.title = "ZArchitecture | Agence d’architecture à Paris";
-  const slides = DATA.slides.map(([slug, key]) => ({ p: bySlug[slug], key }));
-  main.innerHTML = `
-    <h1 class="vh">ZArchitecture, agence d’architecture à Paris</h1>
-    <section class="hero" aria-roledescription="carrousel" aria-label="Projets à la une">
+const HOME_LABELS = ["Maisons", "Habitat collectif et groupé", "Équipements, bureaux et commerces", "Concours & Idées"];
+const homeGroup = p => {
+  if (p.cat === "concours-idees") return 3;
+  if (p.types.some(t => t === "Équipements" || t === "Bureaux") || (p.types.includes("Commerces") && !p.types.includes("Logements"))) return 2;
+  if (/immeuble|collectif|mitoyen|logements et/i.test(p.typeLabel)) return 1;
+  return 0;
+};
+const showHTML = (cls, label) => `
+    <section class="${cls}" aria-roledescription="carrousel" aria-label="${esc(label)}">
       <div class="hero-stage"></div>
       <div class="hero-cap">
         <div class="hero-text" aria-live="polite"></div>
@@ -706,31 +714,39 @@ function renderHome() {
         </div>
       </div>
       <div class="hero-progress" aria-hidden="true"><i></i></div>
-    </section>
+    </section>`;
+
+function renderHome() {
+  document.title = "ZArchitecture | Agence d’architecture à Paris";
+  const slides = DATA.slides.map(([slug, key]) => ({ p: bySlug[slug], key }));
+  const groups = HOME_LABELS.map(label => ({ label, slides: [] }));
+  DATA.projects.filter(p => !p.unlisted).forEach(p => groups[homeGroup(p)].slides.push({ p, key: p.cover || p.images[0] }));
+  const shows = groups.filter(g => g.slides.length);
+  // éviter qu'un diaporama empilé commence par le même projet que le grand diaporama
+  shows.forEach(g => { if (g.slides.length > 1 && slides.length && g.slides[0].p === slides[0].p) g.slides.push(g.slides.shift()); });
+  main.innerHTML = `
+    <h1 class="vh">ZArchitecture, agence d’architecture à Paris</h1>
+    ${showHTML("hero", "Projets à la une")}
     <section class="intro" aria-label="Présentation">
       <p>ZArchitecture est une agence d’architecture généraliste fondée à Paris en 2026. Équipements, logements, bureaux, espaces intérieurs&nbsp;: nous concevons chaque projet et le suivons de l’esquisse au chantier, en France et à l’international.</p>
       <a class="tl" href="#/agence">Découvrir l’agence</a>
     </section>
-    <section aria-labelledby="idx-t">
-      <div class="sec-head idx-head"><h2 id="idx-t">Projets</h2><span class="idx-col">Lieu</span><span class="idx-col">Programme</span><a class="tl" href="#/projets">Tous les projets</a></div>
-      <ul class="index-list">
-        ${P.filter(p => !p.unlisted).map(p => `<li><a class="irow" href="#/projets/${p.slug}">
-          <span class="ir-t">${esc(p.title)}</span>
-          <span class="ir-m ir-place">${esc(p.lieu)}</span>
-          <span class="ir-m ir-type">${esc(p.typeLabel)}</span>
-          <span class="ir-m ir-y">${esc(p.annee || p.statut)}</span>
-        </a></li>`).join("")}
-      </ul>
-    </section>`;
+    <div class="shows">${shows.map(g => showHTML("hero show", g.label)).join("")}</div>`;
+  carousel(main.querySelector(".hero:not(.show)"), slides, {});
+  main.querySelectorAll(".hero.show").forEach((el, n) =>
+    carousel(el, shows[n].slides, { label: shows[n].label, offset: 1700 * (n + 1), lazy: true }));
+}
 
-  const hero = main.querySelector(".hero");
+/* Diaporama réutilisable : accueil et diaporamas empilés */
+function carousel(hero, slides, opts) {
   const stage = hero.querySelector(".hero-stage");
   const text = hero.querySelector(".hero-text");
   const bar = hero.querySelector(".hero-progress i");
   const tog = hero.querySelector('[data-h="toggle"]');
   const DUR = 6500;
   hero.style.setProperty("--dur", DUR + "ms");
-  let i = 0, timer = null, paused = reduce.matches, hold = false, started = 0, remaining = DUR;
+  let i = 0, timer = null, paused = reduce.matches, hold = false, off = false, running = false, started = 0, remaining = DUR;
+  const blocked = () => paused || hold || off || document.hidden;
 
   const setToggle = () => {
     tog.innerHTML = paused ? ICON.play : ICON.pause;
@@ -738,26 +754,30 @@ function renderHome() {
   };
   const caption = n => {
     const p = slides[n].p;
-    text.innerHTML = `<a class="hero-title" href="#/projets/${p.slug}">${esc(p.title)}</a>
+    text.innerHTML = `${opts.label ? `<p class="hero-kicker">${esc(opts.label)}</p>` : ""}<a class="hero-title" href="#/projets/${p.slug}">${esc(p.title)}</a>
       <p class="hero-meta"><span>${esc(p.lieu)}</span><span>${esc(p.typeLabel)}</span>${p.annee ? `<span>${esc(p.annee)}</span>` : ""}</p>`;
   };
   const startTimer = () => {
     clearTimeout(timer);
-    if (paused || hold) return;
+    if (blocked()) { running = false; hero.classList.add("is-paused"); return; }
     started = performance.now();
+    running = true;
     timer = setTimeout(() => go(i + 1), remaining);
     hero.classList.remove("is-paused");
+    if (slides.length > 1) (new Image()).src = IMG[slides[(i + 1) % slides.length].key];
   };
   const stopTimer = () => {
     clearTimeout(timer);
-    remaining = Math.max(0, remaining - (performance.now() - started));
+    if (running) remaining = Math.max(0, remaining - (performance.now() - started));
+    running = false;
     hero.classList.add("is-paused");
   };
-  const resetBar = () => {
+  const resetBar = delay => {
     bar.classList.remove("run");
+    bar.style.animationDelay = delay ? delay + "ms" : "";
     void bar.offsetWidth;
     bar.classList.add("run");
-    remaining = DUR;
+    remaining = DUR + (delay || 0);
     started = performance.now();
   };
   function go(n, initial) {
@@ -768,8 +788,7 @@ function renderHome() {
     el.href = `#/projets/${s.p.slug}`;
     el.tabIndex = -1;
     el.setAttribute("aria-hidden", "true");
-    el.innerHTML = pic(s.key, "");
-    (new Image()).src = IMG[slides[(i + 1) % slides.length].key];
+    el.innerHTML = pic(s.key, "", initial && opts.lazy ? 'loading="lazy"' : "");
     stage.appendChild(el);
     if (initial || reduce.matches) {
       while (stage.firstChild !== el) stage.firstChild.remove();
@@ -784,9 +803,9 @@ function renderHome() {
       text.classList.add("fade");
       setTimeout(() => { caption(i); text.classList.remove("fade"); }, 280);
     }
-    resetBar();
-    if (paused || hold) { clearTimeout(timer); hero.classList.add("is-paused"); }
-    else startTimer();
+    resetBar(initial ? opts.offset : 0);
+    running = false;
+    startTimer();
   }
   hero.addEventListener("click", e => {
     const b = e.target.closest("[data-h]");
@@ -802,24 +821,29 @@ function renderHome() {
   hero.addEventListener("pointerenter", e => {
     if (e.pointerType !== "mouse") return;
     hold = true;
-    if (!paused) stopTimer();
+    stopTimer();
   });
   hero.addEventListener("pointerleave", e => {
     if (e.pointerType !== "mouse") return;
     hold = false;
-    if (!paused) startTimer();
+    startTimer();
   });
   hero.addEventListener("keydown", e => {
     if (e.key === "ArrowLeft") { e.preventDefault(); go(i - 1); }
     if (e.key === "ArrowRight") { e.preventDefault(); go(i + 1); }
   });
   swipe(hero, () => go(i + 1), () => go(i - 1));
-  const vis = () => {
-    if (document.hidden) { if (!paused && !hold) stopTimer(); }
-    else if (!paused && !hold) startTimer();
-  };
+  const vis = () => { if (document.hidden) stopTimer(); else startTimer(); };
   document.addEventListener("visibilitychange", vis);
-  cleanups.push(() => { clearTimeout(timer); document.removeEventListener("visibilitychange", vis); });
+  let io = null;
+  if ("IntersectionObserver" in window) {
+    io = new IntersectionObserver(([en]) => {
+      off = !en.isIntersecting;
+      if (off) stopTimer(); else startTimer();
+    }, { threshold: 0.2 });
+    io.observe(hero);
+  }
+  cleanups.push(() => { clearTimeout(timer); document.removeEventListener("visibilitychange", vis); if (io) io.disconnect(); });
   setToggle();
   go(0, true);
 }
